@@ -1,0 +1,696 @@
+
+CREATE TABLE Post(
+id_pos serial,
+title varchar(64) UNIQUE NOT NULL,
+salary numeric(10, 2) NOT NULL,
+CONSTRAINT postPK PRIMARY KEY(id_pos),
+CONSTRAINT CHK_Post_salary CHECK (salary >=0)
+);
+
+CREATE TABLE Employee(
+id_employee serial,
+ful_name varchar(120) NOT NULL,
+id_pos int NOT NULL,
+date_of_birth date,
+contact_info varchar(32) UNIQUE NOT NULL,
+hours int DEFAULT 0,
+status varchar(10) DEFAULT 'Активен',
+login text UNIQUE NOT NULL,
+pass text NOT NULL,
+
+CONSTRAINT employeePK PRIMARY KEY(id_employee),
+CONSTRAINT employeeFK FOREIGN KEY (id_pos) REFERENCES Post(id_pos)
+ON DELETE RESTRICT
+ON UPDATE CASCADE,
+CONSTRAINT CHK_Employee_date_of_birth CHECK(date_of_birth <= CURRENT_DATE - INTERVAL '18 years'),
+CONSTRAINT CHK_Employee_hours CHECK (hours >= 0),
+CONSTRAINT CHK_Employee_status CHECK (status IN ('Активен', 'Уволен'))
+);
+
+CREATE TABLE Shift(
+id_shift serial,
+shift_date date NOT NULL,
+shift_start timestamp NOT NULL,
+shift_end timestamp NOT NULL,
+CONSTRAINT shiftPK PRIMARY KEY(id_shift),
+CONSTRAINT CHK_Shift_time CHECK(shift_end > shift_start)
+);
+
+CREATE TABLE Employee_Shift(
+id_ES serial,
+id_employee int NOT NULL,
+id_shift int NOT NULL,
+CONSTRAINT ESPK PRIMARY KEY (id_ES),
+CONSTRAINT ESFK1 FOREIGN KEY (id_employee) REFERENCES Employee(id_employee)
+ON DELETE CASCADE
+ON UPDATE CASCADE,
+CONSTRAINT ESFK2 FOREIGN KEY (id_shift) REFERENCES Shift(id_shift)
+ON DELETE CASCADE
+ON UPDATE CASCADE
+);
+
+CREATE TABLE Ingredient(
+id_ingredient serial,
+name_i varchar(64) UNIQUE NOT NULL,
+ed_izmer varchar(16) NOT NULL,
+amount numeric(10,3) DEFAULT 0,
+delivery_date date NOT NULL,
+expiration_date date NOT NULL,
+purchase_price numeric(10,2) NOT NULL,
+CONSTRAINT ingredientPK PRIMARY KEY(id_ingredient),
+CONSTRAINT CHK_Ingredient_amount CHECK (amount >= 0),
+CONSTRAINT CHK_Ingredient_delivery_date CHECK (delivery_date <= CURRENT_DATE),
+CONSTRAINT CHK_Ingredient_expiration_date CHECK (expiration_date > delivery_date AND expiration_date > CURRENT_DATE),
+CONSTRAINT CHK_Ingredient_price CHECK (purchase_price >= 0)
+);
+
+CREATE TABLE Dish(
+id_dish serial,
+name_dish varchar(64) UNIQUE NOT NULL,
+ed_izmer varchar(16) NOT NULL,
+markup numeric (5,2),
+calk_cost numeric(10,2) DEFAULT 0 NOT NULL,
+price numeric(10,2) NOT NULL,
+CONSTRAINT dishPK PRIMARY KEY(id_dish),
+CONSTRAINT CHK_Dish_markup CHECK (markup > 0)
+);
+
+CREATE TABLE Recipe(
+id_recipe serial,
+id_dish int NOT NULL,
+id_ingredient int NOT NULL,
+amount numeric(10,3),
+CONSTRAINT recipePK PRIMARY KEY(id_recipe),
+CONSTRAINT recipeFK1 FOREIGN KEY (id_dish) REFERENCES Dish(id_dish)
+ON DELETE CASCADE
+ON UPDATE CASCADE,
+CONSTRAINT recipeFK2 FOREIGN KEY (id_ingredient) REFERENCES Ingredient(id_ingredient)
+ON DELETE RESTRICT
+ON UPDATE CASCADE,
+CONSTRAINT CHK_Recipe_amount CHECK (amount > 0)
+);
+
+CREATE TABLE TableInfo (
+id_table serial,
+table_number int,
+seats int,
+reserved boolean DEFAULT FALSE,
+reservation_time timestamp,
+CONSTRAINT tablePK PRIMARY KEY(id_table),
+CONSTRAINT CHK_Table_seats CHECK (seats > 0),
+CONSTRAINT CHK_Table_time CHECK (reservation_time >= CURRENT_TIMESTAMP)
+);
+
+CREATE TABLE Orderr(
+id_order serial,
+id_table int NOT NULL,
+id_waiter int NOT NULL,
+id_cook int,
+status varchar(20) DEFAULT 'Создан',
+total_cost numeric(10,2) DEFAULT 0,
+close_datetime timestamp,
+order_created timestamp DEFAULT CURRENT_TIMESTAMP,
+CONSTRAINT orderPK PRIMARY KEY(id_order),
+CONSTRAINT orderFK1 FOREIGN KEY (id_table) REFERENCES TableInfo(id_table)
+ON DELETE RESTRICT
+ON UPDATE CASCADE,
+CONSTRAINT orderFK2 FOREIGN KEY (id_waiter) REFERENCES Employee(id_employee)
+ON DELETE RESTRICT
+ON UPDATE CASCADE,
+CONSTRAINT orderFK3 FOREIGN KEY (id_cook) REFERENCES Employee(id_employee)
+ON DELETE RESTRICT
+ON UPDATE CASCADE,
+CONSTRAINT CHK_Order_status CHECK (status IN ('Создан', 'В приготовлении', 'Готов'))
+);
+
+CREATE TABLE Order_item(
+id_OI serial,
+id_order int NOT NULL,
+id_dish int NOT NULL,
+amount int,
+item_cost numeric(10,2),
+CONSTRAINT OIPK PRIMARY KEY(id_OI),
+CONSTRAINT OIFK1 FOREIGN KEY (id_order) REFERENCES Orderr(id_order)
+ON DELETE CASCADE
+ON UPDATE CASCADE,
+CONSTRAINT OIFK2 FOREIGN KEY (id_dish) REFERENCES Dish(id_dish)
+ON DELETE RESTRICT
+ON UPDATE CASCADE,
+CONSTRAINT CHK_OI_amount CHECK (amount > 0)
+);
+-- Автоматическое обновление отработаных часов у сотрудников, после завершения смены
+CREATE OR REPLACE FUNCTION update_employee_hours_on_shift_end()
+RETURNS TRIGGER AS $$
+DECLARE
+    duration_hours INT;
+BEGIN
+    IF OLD.shift_end IS NULL AND NEW.shift_end IS NOT NULL THEN
+        duration_hours := EXTRACT(EPOCH FROM (NEW.shift_end - NEW.shift_start)) / 3600;
+        UPDATE Employee
+        SET hours = COALESCE(hours, 0) + duration_hours
+        WHERE id_employee IN (
+            SELECT id_employee FROM Employee_Shift WHERE id_shift = NEW.id_shift
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trig_update_employee_hours
+BEFORE UPDATE OF shift_end ON Shift
+FOR EACH ROW
+EXECUTE FUNCTION update_employee_hours_on_shift_end();
+
+
+-- функция для автоматического подсчёта себестоимости блюда
+CREATE OR REPLACE FUNCTION dish_cost(dish_id INT)
+RETURNS VOID AS $$
+DECLARE
+    total_cost NUMERIC(10,2);
+    dish_markup NUMERIC(5,2);
+BEGIN
+    SELECT COALESCE(SUM(r.amount * i.purchase_price), 0)
+    INTO total_cost
+    FROM Recipe r
+    JOIN Ingredient i ON r.id_ingredient = i.id_ingredient
+    WHERE r.id_dish = dish_id;
+	
+    SELECT markup INTO dish_markup
+    FROM Dish
+    WHERE id_dish = dish_id;
+
+    UPDATE Dish
+    SET calk_cost = total_cost,
+        price = total_cost * (1 + dish_markup)
+    WHERE id_dish = dish_id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- функция, которая проверяет, есть ли необходимое количество ингридиентов для создания блюда
+CREATE OR REPLACE FUNCTION ingr_v_zakaze(order_id int)
+RETURNS boolean AS $$
+DECLARE
+    need_ingredient RECORD;
+    total_needed numeric(10,3);
+    current_stock numeric(10,3);
+BEGIN
+    FOR need_ingredient IN
+        SELECT i.id_ingredient, SUM(oi.amount * r.amount) AS total_amount
+        FROM Order_item oi
+        JOIN Recipe r ON oi.id_dish = r.id_dish
+        JOIN Ingredient i ON r.id_ingredient = i.id_ingredient
+        WHERE oi.id_order = order_id
+        GROUP BY i.id_ingredient
+    LOOP
+        SELECT amount INTO current_stock
+        FROM Ingredient
+        WHERE id_ingredient = need_ingredient.id_ingredient;
+
+        IF current_stock < need_ingredient.total_amount THEN
+            RAISE EXCEPTION 'Недостаточно ингредиента %: требуется %, в наличии %',
+                (SELECT name_i FROM Ingredient WHERE id_ingredient = need_ingredient.id_ingredient),
+                need_ingredient.total_amount, current_stock;
+        END IF;
+    END LOOP;
+
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- функция, которая списывает ингридиента со склада, после приготовления блюда
+CREATE OR REPLACE FUNCTION spisanie_ingrid(order_id int)
+RETURNS VOID AS $$
+DECLARE
+    need_ingredient RECORD;
+BEGIN
+    FOR need_ingredient IN
+        SELECT i.id_ingredient, SUM(oi.amount * r.amount) AS total_amount
+        FROM Order_item oi
+        JOIN Recipe r ON oi.id_dish = r.id_dish
+        JOIN Ingredient i ON r.id_ingredient = i.id_ingredient
+        WHERE oi.id_order = order_id
+        GROUP BY i.id_ingredient
+    LOOP
+        UPDATE Ingredient
+        SET amount = amount - need_ingredient.total_amount
+        WHERE id_ingredient = need_ingredient.id_ingredient;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+--формирование чека
+CREATE OR REPLACE FUNCTION gen_check(order_id int)
+RETURNS TABLE (
+    dish_name varchar(64),
+    quantity int,
+    price_per_unit numeric(10,2),
+    total_line numeric(10,2)
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT d.name_dish, oi.amount, d.price, oi.item_cost
+    FROM Order_item oi
+    JOIN Dish d ON oi.id_dish = d.id_dish
+    WHERE oi.id_order = order_id;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT * FROM gen_check(1);
+
+-- функция, для формирования топ 5 блюд, по выручке
+CREATE OR REPLACE FUNCTION top_blud(period_start timestamp, period_end timestamp, top_n int DEFAULT 5)
+RETURNS TABLE (
+    dish_name varchar(64),
+    total_sold int,
+    total_revenue numeric(10,2)
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT d.name_dish,
+           SUM(oi.amount)::int,
+           SUM(oi.item_cost)
+    FROM Orderr o
+    JOIN Order_item oi ON o.id_order = oi.id_order
+    JOIN Dish d ON oi.id_dish = d.id_dish
+    WHERE o.close_datetime BETWEEN period_start AND period_end
+      AND o.status = 'Готов'
+    GROUP BY d.id_dish, d.name_dish
+    ORDER BY SUM(oi.item_cost) DESC
+    LIMIT top_n;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT * FROM top_blud('2025-1-01', '2025-12-31', 5);
+
+-- проверка срока годности ингридиента, перед приготовлением
+CREATE OR REPLACE FUNCTION srok_god(dish_id int)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1
+        FROM Recipe r
+        JOIN Ingredient i ON r.id_ingredient = i.id_ingredient
+        WHERE r.id_dish = dish_id
+          AND i.expiration_date <= CURRENT_DATE
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+-- тригер, который изменит себестоимость блюда, если закупочная цена ингридиента изменилась
+CREATE OR REPLACE FUNCTION sebe_stoim_zakup_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM dish_cost(r.id_dish)
+    FROM Recipe r
+    WHERE r.id_ingredient = NEW.id_ingredient;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trig_sebe_stoim_zakup_change 
+AFTER UPDATE OF purchase_price ON Ingredient
+FOR EACH ROW
+EXECUTE FUNCTION sebe_stoim_zakup_change();
+
+-- тригер, который изменит стоимость блюда, при изменении рецепта
+CREATE OR REPLACE FUNCTION izm_stoim_iznm_recept()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM dish_cost(NEW.id_dish);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trig_izm_stoim_iznm_recept
+AFTER INSERT OR UPDATE OR DELETE ON Recipe
+FOR EACH ROW
+EXECUTE FUNCTION izm_stoim_iznm_recept();
+
+-- тригер, при изменении статуса заказа, проверяется наличие просроченных ингридиентов если нет, то ингридиенты списываются
+CREATE OR REPLACE FUNCTION izm_status_ingr()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.status = 'В приготовлении' AND OLD.status = 'Создан' THEN
+        IF EXISTS (
+            SELECT 1
+            FROM Order_item oi
+            WHERE oi.id_order = NEW.id_order
+              AND srok_god(oi.id_dish)
+        ) THEN
+            RAISE EXCEPTION 'Невозможно начать приготовление: в заказе есть блюда с просроченными ингредиентами';
+        END IF;
+    END IF;
+    IF NEW.status = 'Готов' AND OLD.status IN ('В приготовлении', 'Создан') THEN      
+        PERFORM ingr_v_zakaze(NEW.id_order);   
+        PERFORM spisanie_ingrid(NEW.id_order);
+        NEW.close_datetime = CURRENT_TIMESTAMP;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER trig_order_status
+BEFORE UPDATE OF status ON Orderr
+FOR EACH ROW
+EXECUTE FUNCTION izm_status_ingr();
+INSERT INTO Post (title, salary) VALUES
+('Повар', 65000.00),
+('Официант', 45000.00),
+('Бариста', 48000.00),
+('Уборщик', 35000.00),
+('Менеджер зала', 70000.00),
+('Су-шеф', 85000.00),
+('Шеф-повар', 120000.00),
+('Администратор', 55000.00),
+('Бармен', 50000.00),
+('Помощник повара', 40000.00);
+
+INSERT INTO Employee (ful_name, id_pos, date_of_birth, contact_info, hours, status, login, pass) VALUES
+('Иванов Иван Иванович', 1, '1990-03-15', '+79001111111', 160, 'Активен', '+79001111111', '123'),
+('Петров Пётр Петрович', 2, '1985-07-22', '+79002222222', 150, 'Активен', '+79002222222', '123'),
+('Сидорова Анна Сергеевна', 3, '2000-12-01', '+79003333333', 140, 'Активен', '+79003333333', '123'),
+('Кузнецов Дмитрий Викторович', 4, '1978-11-05', '+79004444444', 0, 'Уволен', '+79004444444', '123'),
+('Морозова Елена Андреевна', 5, '1995-02-28', '+79005555555', 170, 'Активен', '+79005555555', '123'),
+('Соколов Алексей Николаевич', 6, '1988-09-10', '+79006666666', 165, 'Активен', '+79006666666', '123'),
+('Волкова Мария Игоревна', 2, '2001-05-30', '+79007777777', 145, 'Активен', '+79007777777', '123'),
+('Лебедев Сергей Павлович', 7, '1982-04-14', '+79008888888', 180, 'Активен', '+79008888888', '123'),
+('Новикова Ольга Владимировна', 8, '1993-08-19', '+79009999999', 155, 'Активен', '+79009999999', '123'),
+('Григорьев Артём Олегович', 2, '2002-01-15', '+79010000000', NULL, 'Активен', '+79010000000', '123');
+
+INSERT INTO Shift (shift_date, shift_start, shift_end) VALUES
+('2025-12-01', '2025-12-01 08:00:00', '2025-12-01 16:00:00'),
+('2025-12-01', '2025-12-01 16:00:00', '2025-12-01 23:59:59'),
+('2025-12-02', '2025-12-02 08:00:00', '2025-12-02 16:00:00'),
+('2025-12-02', '2025-12-02 16:00:00', '2025-12-02 23:59:59'),
+('2025-12-03', '2025-12-03 08:00:00', '2025-12-03 16:00:00'),
+('2025-12-04', '2025-12-04 08:00:00', '2025-12-04 16:00:00'),
+('2025-12-05', '2025-12-05 08:00:00', '2025-12-05 16:00:00'),
+('2025-12-06', '2025-12-06 08:00:00', '2025-12-06 16:00:00'),
+('2025-12-07', '2025-12-07 08:00:00', '2025-12-07 16:00:00'),
+('2025-12-08', '2025-12-08 08:00:00', '2025-12-08 16:00:00');
+
+INSERT INTO Employee_Shift (id_employee, id_shift) VALUES
+(1, 1),
+(2, 1),
+(2, 2),
+(3, 1),
+(4, 1),
+(5, 3),
+(6, 3),
+(7, 4),
+(8, 5),
+(9, 6),
+(10, 7),
+(1, 3), -- повтор сотрудника в другую смену
+(2, 5),
+(3, 7);
+
+-- я использую выражения с CURRENT_DATE для того, чтобы срок годности всегда был в будущем и код заработал в любую дату.
+INSERT INTO Ingredient (name_i, ed_izmer, amount, delivery_date, expiration_date, purchase_price) VALUES
+('Куриное филе', 'кг', 50.000, CURRENT_DATE - 5, CURRENT_DATE + 60, 350.00),
+('Говядина', 'кг', 30.000, CURRENT_DATE - 3, CURRENT_DATE + 90, 600.00),
+('Картофель', 'кг', 100.000, CURRENT_DATE - 7, CURRENT_DATE + 45, 40.00),
+('Молоко', 'л', 20.000, CURRENT_DATE - 2, CURRENT_DATE + 8, 70.00),
+('Сыр моцарелла', 'кг', 10.000, CURRENT_DATE - 4, CURRENT_DATE + 50, 800.00),
+('Томаты', 'кг', 25.000, CURRENT_DATE - 1, CURRENT_DATE + 12, 120.00),
+('Лук репчатый', 'кг', 40.000, CURRENT_DATE - 6, CURRENT_DATE + 80, 30.00),
+('Сливки 20%', 'л', 15.000, CURRENT_DATE - 1, CURRENT_DATE + 7, 100.00),
+('Мука пшеничная', 'кг', 60.000, CURRENT_DATE - 10, CURRENT_DATE + 120, 50.00),
+('Яйца куриные', 'шт', 300.000, CURRENT_DATE, CURRENT_DATE + 20, 0.80);
+
+
+INSERT INTO Dish (name_dish, ed_izmer, markup, calk_cost, price) VALUES
+('Борщ', 'порция', 2.50, 120.00, 300.00),
+('Паста Карбонара', 'порция', 2.80, 150.00, 420.00),
+('Стейк Рибай', 'порция', 3.00, 500.00, 1500.00),
+('Салат Цезарь', 'порция', 2.60, 100.00, 260.00),
+('Куриные наггетсы', 'порция', 2.40, 80.00, 192.00),
+('Оливье', 'порция', 2.30, 70.00, 161.00),
+('Чизбургер', 'шт', 2.70, 90.00, 243.00),
+('Пицца Маргарита', 'шт', 2.90, 180.00, 522.00),
+('Капучино', 'стакан', 3.50, 40.00, 140.00),
+('Тирамису', 'порция', 3.20, 110.00, 352.00);
+
+INSERT INTO Recipe (id_dish, id_ingredient, amount) VALUES
+(1, 2, 0.300), 
+(1, 3, 0.200), 
+(1, 6, 0.100), 
+(1, 7, 0.050), 
+(2, 10, 2.000), 
+(2, 5, 0.150), 
+(3, 2, 0.350), 
+(4, 6, 0.120), 
+(4, 5, 0.080), 
+(5, 1, 0.250),
+(6, 3, 0.150), 
+(6, 10, 1.000), 
+(7, 1, 0.200),
+(8, 9, 0.300), 
+(9, 4, 0.200), 
+(10, 5, 0.100), 
+(10, 4, 0.050); 
+
+INSERT INTO TableInfo (table_number, seats, reserved, reservation_time) VALUES
+(1, 2, FALSE, NULL),
+(2, 4, FALSE, NULL),
+(3, 6, TRUE, '2026-01-10 19:00:00'),
+(4, 2, TRUE, '2026-01-05 20:00:00'),
+(5, 8, FALSE, NULL),
+(6, 4, FALSE, NULL),
+(7, 2, TRUE, '2026-01-15 18:30:00'),
+(8, 6, FALSE, NULL),
+(9, 4, TRUE, '2026-01-20 19:30:00'),
+(10, 2, FALSE, NULL);
+
+INSERT INTO Orderr (id_table, id_waiter, id_cook, status, total_cost, close_datetime, order_created) VALUES
+(1, 2, 1, 'Готов', 460.00, '2025-12-01 20:30:00', '2025-12-01 20:00:00'),
+(2, 7, 1, 'Готов', 682.00, '2025-12-01 21:15:00', '2025-12-01 20:45:00'),
+(3, 2, 6, 'В приготовлении', 1500.00, NULL, '2025-01-10 19:05:00'),
+(4, 7, 6, 'Создан', 0.00, NULL, '2025-01-05 19:55:00'),
+(5, 2, 1, 'Готов', 300.00, '2025-12-02 13:10:00', '2025-12-02 13:00:00'),
+(6, 7, 8, 'Готов', 763.00, '2025-12-03 20:45:00', '2025-12-03 20:15:00'),
+(7, 2, 1, 'Создан', 0.00, NULL, '2025-01-15 18:35:00'),
+(8, 7, 6, 'Готов', 420.00, '2025-12-04 21:00:00', '2025-12-04 20:30:00'),
+(9, 2, 8, 'В приготовлении', 352.00, NULL, '2025-01-20 19:35:00'),
+(10, 7, 1, 'Готов', 140.00, '2025-12-06 8:20:00', '2025-12-06 7:00:00'),
+(10, 7, 1, 'Готов', 140.00, '2025-12-07 4:20:00', '2025-12-07 5:00:00'),
+(10, 7, 1, 'Готов', 140.00, '2025-12-08 21:20:00', '2025-12-08 22:00:00'),
+(10, 7, 1, 'Готов', 140.00, '2025-12-09 2:20:00', '2025-12-09 3:00:00'),
+(10, 7, 1, 'Готов', 140.00, '2025-12-05 14:20:00', '2025-12-05 14:00:00');
+
+INSERT INTO Order_item (id_order, id_dish, amount, item_cost) VALUES
+(1, 1, 1, 300.00),
+(1, 9, 2, 280.00),
+(2, 2, 1, 420.00),
+(2, 4, 2, 520.00),
+(5, 1, 1, 300.00),
+(6, 2, 1, 420.00),
+(6, 7, 1, 243.00),
+(6, 9, 1, 140.00),
+(8, 2, 1, 420.00),
+(10, 9, 1, 140.00),
+(3, 3, 1, 1500.00),
+(4, 5, 1, 192.00),
+(7, 10, 1, 352.00),
+(9, 10, 1, 352.00);
+
+
+--информация о заказах информацией о официанте, поваре, столике
+SELECT 
+    o.id_order,
+    o.order_created,
+    t.table_number,
+    w.ful_name AS waiter_name,
+    c.ful_name AS cook_name,
+    o.status,
+    o.total_cost
+FROM Orderr o
+JOIN TableInfo t ON o.id_table = t.id_table
+JOIN Employee w ON o.id_waiter = w.id_employee
+LEFT JOIN Employee c ON o.id_cook = c.id_employee
+WHERE o.status = 'Готов';
+
+-- LEFT JOIN, запрос с группировкой, блюда и их ингридиенты
+SELECT 
+    d.name_dish,
+    d.price,
+    i.name_i AS ingredient_name,
+    r.amount AS ingredient_amount,
+    i.ed_izmer
+FROM Dish d
+LEFT JOIN Recipe r ON d.id_dish = r.id_dish
+LEFT JOIN Ingredient i ON r.id_ingredient = i.id_ingredient
+ORDER BY d.name_dish;
+
+-- RIGHT JOIN, сотрудники и их смены
+SELECT 
+    e.ful_name,
+    p.title AS position,
+    s.shift_date,
+    s.shift_start,
+    s.shift_end
+FROM Employee_Shift es
+RIGHT JOIN Employee e ON es.id_employee = e.id_employee
+RIGHT JOIN Shift s ON es.id_shift = s.id_shift
+JOIN Post p ON e.id_pos = p.id_pos
+WHERE e.status = 'Активен';
+
+-- FULL JOIN + агрегатная функция, заказы на столики
+SELECT 
+    t.table_number,
+    t.seats,
+    COUNT(o.id_order) AS total_orders,
+    COALESCE(SUM(o.total_cost), 0) AS total_revenue,
+    AVG(o.total_cost) AS avg_order_value
+FROM TableInfo t
+FULL JOIN Orderr o ON t.id_table = o.id_table
+GROUP BY t.table_number, t.seats
+ORDER BY total_revenue DESC;
+
+-- VIEW (на 2-х таблицах и более) с опцией CHECK + запрос на эту VIEW.
+CREATE VIEW Recipe_Management AS
+SELECT 
+    r.id_recipe,
+    d.name_dish,
+    d.price,
+    i.name_i AS ingredient_name,
+    r.amount AS required_amount,
+    i.amount AS current_stock,
+    i.expiration_date,
+    (i.amount >= r.amount) AS has_sufficient_stock
+FROM Recipe r
+JOIN Dish d ON r.id_dish = d.id_dish
+JOIN Ingredient i ON r.id_ingredient = i.id_ingredient
+WHERE i.expiration_date > CURRENT_DATE;
+
+-- CASE WHEN и COALESE&NULLIF, категория блюд по доходности и цене
+SELECT * FROM Recipe_Management 
+WHERE has_sufficient_stock = false;
+
+SELECT 
+    name_dish,
+    price,
+    calk_cost,
+    (price - calk_cost) AS profit,
+    CASE 
+        WHEN price < 200 THEN 'Бюджетное'
+        WHEN price BETWEEN 200 AND 500 THEN 'Средняя цена'
+        WHEN price BETWEEN 501 AND 1000 THEN 'Премиум'
+        ELSE 'Люкс'
+    END AS price_category,
+    CASE 
+        WHEN (price - calk_cost) / calk_cost > 2 THEN 'Высокая прибыль'
+        WHEN (price - calk_cost) / calk_cost > 1 THEN 'Средняя прибыль'
+        ELSE 'Низкая прибыль'
+    END AS profitability
+FROM Dish
+ORDER BY price DESC;
+
+--CASE WHEN и COALESE&NULLIF, анализ рабочего времени сотрудника
+SELECT 
+    e.ful_name,
+    p.title,
+    NULLIF(e.hours, 0) AS worked_hours,
+    CASE 
+        WHEN NULLIF(e.hours, 0) IS NULL THEN 'Нет данных'
+        WHEN e.hours > 160 THEN 'Переработка'
+        WHEN e.hours >= 140 THEN 'Норма'
+        ELSE 'Недоработка'
+    END AS hours_status,
+    COALESCE(e.contact_info, 'Контакт не указан') AS contact
+FROM Employee e
+JOIN Post p ON e.id_pos = p.id_pos
+WHERE e.status = 'Активен';
+
+-- Подзапрос с ANY. Cотрудники, которые зарабатывают больше официанта
+SELECT 
+    e.ful_name,
+    p.title,
+    p.salary
+FROM Employee e
+JOIN Post p ON e.id_pos = p.id_pos
+WHERE p.salary > ANY (
+    SELECT salary 
+    FROM Post 
+    WHERE title = 'Официант'
+)
+AND e.status = 'Активен';
+
+--запрос с конструкцией WHERE EXISTS. Cтолы, на которых есть заказ
+SELECT 
+    t.table_number,
+    t.seats,
+    t.reserved,
+    t.reservation_time
+FROM TableInfo t
+WHERE EXISTS (
+    SELECT 1 
+    FROM Orderr o 
+    WHERE o.id_table = t.id_table 
+    AND o.status IN ('Создан', 'В приготовлении')
+)
+ORDER BY t.table_number;
+
+-- скалярная SQL функция, которая возвращает среднюю цену блюд 
+CREATE OR REPLACE FUNCTION avg_dish_price()
+RETURNS NUMERIC(10,2) AS $$
+    SELECT AVG(price) FROM Dish;
+$$ LANGUAGE sql;
+
+SELECT avg_dish_price();
+
+-- функция SQL(набор записей), которая возвращает наценку и себестоимость блюд
+CREATE OR REPLACE FUNCTION dish_cost_markup_info()
+RETURNS TABLE (
+    dish_name VARCHAR(64),
+    cost NUMERIC(10,2),
+    markup_percent NUMERIC(5,2)
+) AS $$
+    SELECT name_dish, calk_cost, markup
+    FROM Dish;
+$$ LANGUAGE sql;
+
+SELECT * FROM dish_cost_markup_info();
+
+-- функция PLPgSQL на обработку ошибки. Находит блюдо по id, если не нашло, то возвращает ошибку
+CREATE OR REPLACE FUNCTION get_dish_name(dish_id INT)
+RETURNS VARCHAR(64) AS $$
+DECLARE
+    dish_name VARCHAR(64);
+BEGIN
+    SELECT name_dish INTO dish_name
+    FROM Dish
+    WHERE id_dish = dish_id;
+
+    IF dish_name IS NULL THEN
+        RAISE EXCEPTION 'Блюдо с ID % не найдено', dish_id;
+    END IF;
+
+    RETURN dish_name;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT get_dish_name(2);
+
+-- агрегатная оконная функция, сумирует итоговую выручку для готовых заказов 
+SELECT
+    id_order,
+    total_cost,
+    SUM(total_cost) OVER (ORDER BY id_order) AS sum_revenue
+FROM Orderr
+WHERE status = 'Готов';
+
+-- ранжирующая оконная функция, выводит заказы по убыванию их стоимости
+SELECT
+    id_order,
+    total_cost,
+    ROW_NUMBER() OVER (ORDER BY total_cost DESC) AS place
+FROM Orderr
+WHERE status = 'Готов';
+
+
+SELECT * FROM employee;
+
+
