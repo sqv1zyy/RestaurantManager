@@ -1,0 +1,6 @@
+babel==2.17.0
+charset-normalizer==3.4.4
+pillow==11.3.0
+psycopg2==2.9.11
+reportlab==4.4.5
+tkcalendar==1.6.1
