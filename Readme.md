@@ -171,6 +171,6 @@ RestaurantManager/
 * **Булатов Илья**
 * **GitHub:** [@yourusername](https://github.com)
 
-_Made with ❤️ using Python & PostgreSQL_
+_Made with using Python & PostgreSQL_
 
 ⭐ Если вам понравился проект, поставьте звезду на GitHub!
