@@ -1,7 +1,7 @@
 # Система управления рестораном с базой данных PostgreSQL и GUI на Python
 
-[![Python](https://shields.io)](https://python.org)
-[![PostgreSQL](https://shields.io)](https://postgresql.org)
+[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12+-336791.svg)](https://postgresql.org)
 
 ## 📋 Описание
 **RestaurantManager** — это полноценная система автоматизации работы ресторана, разработанная в рамках учебной дисциплины «Базы данных». Приложение позволяет комплексно управлять заказами, персоналом, складом ингредиентов, бронированием столов и аналитикой продаж.
