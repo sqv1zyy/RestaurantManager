@@ -691,6 +691,11 @@ FROM Orderr
 WHERE status = 'Готов';
 
 
-SELECT * FROM employee;
+INSERT INTO Employee (ful_name, id_pos, date_of_birth, contact_info, hours, status, login, pass) VALUES
+('Администратор', 8, '1990-01-01', '+79000000001', 0, 'Активен', 'admin', 'admin'),
+('Менеджер', 5, '1988-05-15', '+79000000002', 0, 'Активен', 'manager', 'manager'),
+('Шеф-повар', 7, '1985-11-20', '+79000000003', 0, 'Активен', 'chef', 'chef'),
+('Повар', 1, '1992-03-10', '+79000000004', 0, 'Активен', 'cook', 'cook'),
+('Официант ', 2, '1998-02-28', '+79000000007', 0, 'Активен', 'waiter', 'waiter');
 
 
