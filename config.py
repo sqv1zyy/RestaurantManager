@@ -1,6 +1,6 @@
 DB_CONFIG = {
     "host": "localhost",
-    "database": "last",
+    "database": "final",
     "user": "postgres",
     "password": "local"  
 }

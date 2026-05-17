@@ -19,7 +19,6 @@ from forms.ingredients_admin import open_ingredients
 from forms.all_orders import open_all_orders
 from forms.dish_for_waiter import open_menu_view
 from forms.selles_analyze import open_selles_analyze
-from forms.ingridients_analyze import open_ingridients_analyze
 
 current_user = None
 
@@ -33,7 +32,8 @@ def get_role_by_position(position_title: str) -> str:
         return "cook"
     elif position_title == "Официант":
         return "waiter"
-    
+    else:
+        return "guest"
 
 
 def login_window():
@@ -124,7 +124,6 @@ def main_app():
         buttons.append(("Меню", lambda: open_menu_view(root)))
         buttons.append(("Топ блюд", lambda: open_top_dishes(root)))
         buttons.append(("Анализ продаж", lambda: open_selles_analyze(root)))
-        buttons.append(("Анализ ингредиентов", lambda: open_ingridients_analyze(root)))
 
     if role == "waiter":
         buttons.append(("Новый заказ", lambda: open_new_order(root, current_user)))
