@@ -169,7 +169,7 @@ RestaurantManager/
 ## 👨‍💻 Автор
 
 * **Булатов Илья**
-* **GitHub:** [@sqv1zyy]([https://github.com](https://github.com/sqv1zyy))
+* **GitHub:** [@sqv1zyy](https://github.com/sqv1zyy)
 
 _Made with using Python & PostgreSQL_
 
